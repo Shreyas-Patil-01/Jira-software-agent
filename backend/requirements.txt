@@ -1,12 +1,5 @@
-
-# Groq LLM integration
 groq
-
-# Environment variable management
 python-dotenv
-
-# HTTP requests (useful for future integrations)
 requests
-
-# Data validation and settings
 pydantic
+langgraph

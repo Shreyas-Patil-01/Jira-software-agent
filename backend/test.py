@@ -1,90 +1,96 @@
 
-import os
+import json
+
 from pathlib import Path
-from dotenv import load_dotenv
-from groq import Groq
 
-# 1. Load root .env file
-BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
-
-# 2. Read configuration
-API_KEY = os.getenv("GROQ_API_KEY")
-MODEL = os.getenv("GROQ_MODEL")
-
-if not API_KEY:
-    raise ValueError("GROQ_API_KEY missing in .env")
-
-if not MODEL:
-    raise ValueError("GROQ_MODEL missing in .env")
-
-# 3. Initialize Groq
-client = Groq(api_key=API_KEY)
-
-# 4. Conversation history
-messages = [
-    {
-        "role": "system",
-        "content": "You are a helpful AI assistant. "
-                   "Provide clear, accurate and useful answers."
-    }
-]
+from tools.jira_client import JiraClient
+from graph.workflow import build_jira_graph
 
 
-def chat_with_groq(user_input):
-
-    messages.append({
-        "role": "user",
-        "content": user_input
-    })
-
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            temperature=0.7,
-            max_completion_tokens=1000
-        )
-
-        reply = response.choices[0].message.content
-
-        messages.append({
-            "role": "assistant",
-            "content": reply
-        })
-
-        return reply
-
-    except Exception as e:
-        messages.pop()
-        return f"Groq API Error: {e}"
+BASE_DIR = Path(__file__).resolve().parent
 
 
 def main():
 
-    print("\n" + "=" * 55)
-    print("             GROQ AI CHATBOT")
-    print("=" * 55)
-    print(f"Model: {MODEL}")
-    print("Type 'exit' to quit.")
-    print("=" * 55)
+    print("\n" + "=" * 60)
+    print("          JIRA AI AGENT - TICKET FETCHER")
+    print("=" * 60)
 
-    while True:
+    # Get Jira assignee
+    assignee = input(
+        "\nEnter Jira Assignee Account ID (or type 'me'): "
+    ).strip()
 
-        user_input = input("\nYou: ").strip()
+    if not assignee:
+        print("Assignee cannot be empty.")
+        return
 
-        if user_input.lower() in ["exit", "quit", "bye"]:
-            print("\nChatbot: Goodbye!")
-            break
+    try:
 
-        if not user_input:
-            continue
+        jira = JiraClient()
 
-        print("\nChatbot: ", end="", flush=True)
+        if assignee.lower() == "me":
+            account_id = jira._get("/rest/api/3/myself")["accountId"]
+        else:
+            account_id = assignee
 
-        response = chat_with_groq(user_input)
+        print(f"\nAssignee Account ID: {account_id}")
 
-        print(response)
+        # Build LangGraph
+        app = build_jira_graph()
+
+        # Initial state
+        initial_state = {
+            "assignee_account_id": account_id,
+            "tickets": [],
+            "total_tickets": 0,
+            "status": "started",
+            "error": ""
+        }
+
+        # Execute graph
+        print("\nExecuting LangGraph workflow...")
+
+        result = app.invoke(initial_state)
+
+        if result["status"] != "completed":
+            print("\nAgent failed:", result["error"])
+            return
+
+        # Save results
+        output_dir = BASE_DIR / "output"
+        output_dir.mkdir(exist_ok=True)
+
+        output_file = output_dir / "jira_tickets.json"
+
+        with open(output_file, "w", encoding="utf-8") as file:
+
+            json.dump(
+                result["tickets"],
+                file,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        print("\n" + "=" * 60)
+        print("              EXECUTION COMPLETED")
+        print("=" * 60)
+
+        print(f"Total tickets fetched: {result['total_tickets']}")
+        print(f"JSON output: {output_file}")
+
+        print("\nTickets:")
+
+        for ticket in result["tickets"]:
+
+            print(
+                f"{ticket['key']} - "
+                f"{ticket['fields'].get('summary', 'No summary')}"
+            )
+
+    except Exception as error:
+
+        print(f"\nExecution Error: {error}")
 
 
 if __name__ == "__main__":
